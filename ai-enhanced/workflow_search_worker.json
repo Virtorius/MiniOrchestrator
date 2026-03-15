@@ -1,0 +1,123 @@
+{
+  "name": "search_worker_test",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "worker-0001-0001-0001-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first()?.json ?? {};\nconst { date, time, guests = 2, location = 'Center' } = inputData;\nif (!date || !time) { throw new Error('Missing required parameters: date or time'); }\nreturn { date, time, guests: parseInt(guests, 10), location, searchTimestamp: new Date().toISOString() };"
+      },
+      "id": "worker-0002-0002-0002-000000000002",
+      "name": "Parse Input Parameters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, area, capacity, time_slot, features, rating FROM options_catalog WHERE is_active = TRUE AND area ILIKE $1 AND capacity >= $2 ORDER BY rating DESC LIMIT 3;",
+        "additionalFields": {
+          "queryReplacement": "={{ $json.location }}, {{ $json.guests }}"
+        }
+      },
+      "id": "worker-0003-0003-0003-000000000003",
+      "name": "Query Options Catalog",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [650, 300],
+      "retry": {
+        "maxRetries": 3,
+        "retryInterval": 1000
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const dbResults = $input.first()?.json ?? {};\nconst previousData = $input.all()[0]?.json ?? {};\nconst results = Array.isArray(dbResults) ? dbResults : [dbResults];\nconst formattedResults = results.map(item => ({ id: item.id, name: item.name, area: item.area, capacity: item.capacity, rating: parseFloat(item.rating), time_slot: item.time_slot, features: typeof item.features === 'string' ? JSON.parse(item.features) : item.features })).slice(0, 3);\nreturn { status: 'success', search_params: { date: previousData.date, time: previousData.time, guests: previousData.guests, location: previousData.location }, results_count: formattedResults.length, results: formattedResults, timestamp: new Date().toISOString() };"
+      },
+      "id": "worker-0004-0004-0004-000000000004",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first()?.json?.error ?? new Error('Database error');\nconst previousData = $input.all()[0]?.json ?? {};\nreturn { status: 'error', error_type: 'database_error', message: error.message || 'Worker execution failed', context: { date: previousData.date, time: previousData.time, location: previousData.location }, timestamp: new Date().toISOString() };"
+      },
+      "id": "worker-0005-0005-0005-000000000005",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "onError": "continueErrorOutput"
+      },
+      "id": "worker-0006-0006-0006-000000000006",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [450, 500]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Input Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input Parameters": {
+      "main": [
+        [
+          {
+            "node": "Query Options Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Options Catalog": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "pinData": {}
+}
