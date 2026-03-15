@@ -1,0 +1,367 @@
+{
+  "name": "orchestrator_test",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search-request",
+        "responseMode": "responseNode"
+      },
+      "id": "orch-0001-0001-0001-000000000001",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first()?.json ?? {};\nconst message = inputData.message || '';\nconst userId = inputData.user_id || 'unknown';\nfunction extractDate(text) {\n  const tomorrowMatch = text.match(/завтра/i);\n  const todayMatch = text.match(/сегодня/i);\n  const dateMatch = text.match(/(\\d{1,2})\\.(\\d{1,2})\\.(\\d{2,4})/);\n  if (tomorrowMatch) { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); return tomorrow.toISOString().split('T')[0]; }\n  if (todayMatch) { return new Date().toISOString().split('T')[0]; }\n  if (dateMatch) { return dateMatch[3] + '-' + dateMatch[2].padStart(2, '0') + '-' + dateMatch[1].padStart(2, '0'); }\n  return null;\n}\nfunction extractTime(text) {\n  const timeMatch = text.match(/(\\d{1,2}):(\\d{2})/);\n  if (timeMatch) { return timeMatch[1].padStart(2, '0') + ':' + timeMatch[2]; }\n  return null;\n}\nfunction extractGuests(text) {\n  const guestsMatch = text.match(/на (\\d+) человек/);\n  if (guestsMatch) { return parseInt(guestsMatch[1], 10); }\n  const pairMatch = text.match(/на двоих/i);\n  if (pairMatch) { return 2; }\n  return null;\n}\nfunction extractLocation(text) {\n  const centerMatch = text.match(/в центре|центр/i);\n  const northMatch = text.match(/на севере|север/i);\n  const southMatch = text.match(/на юге|юг/i);\n  const eastMatch = text.match(/на востоке|восток/i);\n  const westMatch = text.match(/на западе|запад/i);\n  if (centerMatch) return 'Center';\n  if (northMatch) return 'North';\n  if (southMatch) return 'South';\n  if (eastMatch) return 'East';\n  if (westMatch) return 'West';\n  return null;\n}\nfunction determineIntent(text) {\n  const searchKeywords = /найди|поиск|подбери|вариант|место|ресторан|кафе/i;\n  if (searchKeywords.test(text)) { return 'search_options'; }\n  return 'unknown';\n}\nconst date = extractDate(message);\nconst time = extractTime(message);\nconst guests = extractGuests(message);\nconst location = extractLocation(message);\nconst intent = determineIntent(message);\nconst sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);\nreturn { user_id: userId, session_id: sessionId, message: message, intent: intent, extracted_data: { date, time, guests, location }, raw_input: inputData, timestamp: new Date().toISOString() };"
+      },
+      "id": "orch-0002-0002-0002-000000000002",
+      "name": "Extract Parameters (NLP)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first()?.json ?? {};\nconst extracted = inputData.extracted_data || {};\nconst requiredFields = ['date', 'time', 'guests', 'location'];\nconst missingFields = requiredFields.filter(field => !extracted[field]);\nconst isValid = missingFields.length === 0;\nreturn { ...inputData, validation: { is_valid: isValid, missing_fields: missingFields, checked_at: new Date().toISOString() } };"
+      },
+      "id": "orch-0003-0003-0003-000000000003",
+      "name": "Validate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.validation.is_valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "orch-0004-0004-0004-000000000004",
+      "name": "Validation Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "session_state",
+        "columns": "user_id, session_id, intent, data, status",
+        "values": "={{ $json.user_id }}, {{ $json.session_id }}, {{ $json.intent }}, {{ JSON.stringify($json) }}, 'processing'"
+      },
+      "id": "orch-0005-0005-0005-000000000005",
+      "name": "Save Session State",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1050, 200],
+      "retry": {
+        "maxRetries": 3,
+        "retryInterval": 1000
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "session_id",
+              "value": "={{ $json.session_id }}"
+            },
+            {
+              "name": "intent",
+              "value": "={{ $json.intent }}"
+            },
+            {
+              "name": "user_id",
+              "value": "={{ $json.user_id }}"
+            }
+          ]
+        }
+      },
+      "id": "orch-0006-0006-0006-000000000006",
+      "name": "Store Session Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "search_worker_test"
+        },
+        "inputs": {
+          "date": "={{ $json.extracted_data.date }}",
+          "time": "={{ $json.extracted_data.time }}",
+          "guests": "={{ $json.extracted_data.guests }}",
+          "location": "={{ $json.extracted_data.location }}"
+        }
+      },
+      "id": "orch-0007-0007-0007-000000000007",
+      "name": "Call Search Worker",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "retry": {
+        "maxRetries": 3,
+        "retryInterval": 2000
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const workerResponse = $input.first()?.json ?? {};\nconst sessionContext = $input.all()[1]?.json ?? {};\nreturn { status: 'success', intent: sessionContext.intent || 'search_options', session_id: sessionContext.session_id, results: workerResponse.results || [], results_count: workerResponse.results_count || 0, search_params: workerResponse.search_params, timestamp: new Date().toISOString() };"
+      },
+      "id": "orch-0008-0008-0008-000000000008",
+      "name": "Format Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first()?.json ?? {};\nreturn { status: 'missing_data', intent: inputData.intent || 'search_options', missing_fields: inputData.validation?.missing_fields || [], message: 'Недостаточно данных для поиска: ' + (inputData.validation?.missing_fields || []).join(', '), session_id: inputData.session_id, timestamp: new Date().toISOString() };"
+      },
+      "id": "orch-0009-0009-0009-000000000009",
+      "name": "Format Missing Data Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first()?.json?.error ?? new Error('Orchestrator error');\nconst sessionData = $input.all()[0]?.json ?? {};\nreturn { status: 'error', intent: sessionData.intent || 'unknown', session_id: sessionData.session_id || 'unknown', message: error.message || 'Worker execution failed', error_type: 'orchestrator_error', timestamp: new Date().toISOString() };"
+      },
+      "id": "orch-0010-0010-0010-000000000010",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 500]
+    },
+    {
+      "parameters": {
+        "onError": "continueErrorOutput"
+      },
+      "id": "orch-0011-0011-0011-000000000011",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [1450, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sessionData = $input.first()?.json ?? {};\nconst responseStatus = sessionData.status || 'completed';\nreturn { session_id: sessionData.session_id, new_status: responseStatus === 'error' ? 'error' : 'completed', updated_at: new Date().toISOString() };"
+      },
+      "id": "orch-0012-0012-0012-000000000012",
+      "name": "Update Session State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE session_state SET status = $1, updated_at = NOW() WHERE session_id = $2;",
+        "additionalFields": {
+          "queryReplacement": "={{ $json.new_status }}, {{ $json.session_id }}"
+        }
+      },
+      "id": "orch-0013-0013-0013-000000000013",
+      "name": "Update Session State (DB)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2250, 200],
+      "retry": {
+        "maxRetries": 2,
+        "retryInterval": 1000
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "orch-0014-0014-0014-000000000014",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Parameters (NLP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Parameters (NLP)": {
+      "main": [
+        [
+          {
+            "node": "Validate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data": {
+      "main": [
+        [
+          {
+            "node": "Validation Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Check": {
+      "main": [
+        [
+          {
+            "node": "Save Session State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Missing Data Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Session State": {
+      "main": [
+        [
+          {
+            "node": "Store Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Session Context": {
+      "main": [
+        [
+          {
+            "node": "Call Search Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Search Worker": {
+      "main": [
+        [
+          {
+            "node": "Format Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Response": {
+      "main": [
+        [
+          {
+            "node": "Update Session State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Missing Data Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Session State": {
+      "main": [
+        [
+          {
+            "node": "Update Session State (DB)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Session State (DB)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "pinData": {}
+}
